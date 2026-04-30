@@ -1,4 +1,4 @@
-﻿﻿select * from
+﻿select * from
 (
   SELECT qs.execution_count, 
     SUBSTRING(qt.text,qs.statement_start_offset/2 +1,   
@@ -49,8 +49,6 @@ That’s why:
 Filters are applied after lookup
 Causing RID lookups*/
 
-
-
 /*Iteration 0 – Initial Execution Plan Analysis
 Execution Plan Observations:
 - TABLE SCAN on Order (major bottleneck)
@@ -98,9 +96,36 @@ Conclusion:
 
 
 -- Selectivity checks
-SELECT COUNT(*) FROM Customer WHERE residence = 'Berlin';
-SELECT COUNT(*) FROM "Order" WHERE order_datetime = DATE '2025-05-01';
-SELECT COUNT(*) FROM OrderItem WHERE unit_price BETWEEN 100000 AND 200000;
+/*Selectivity = (rows after filter) / (total rows
+The most selective condition is order_datetime, 
+therefore the query should start from the Order table.
+Why This Matters?
+Because:
+Optimizer prefers most selective filter first
+That reduces:
+intermediate rows
+joins
+CPU cost   
+
+Conclusion:
+The condition on order_datetime is the most selective
+Therefore, the query should begin with the Order table
+Indexing should prioritize this column
+
+Selectivity Analysis:
+The condition on order_datetime has a selectivity of 0.016%, meaning it filters the data very strongly (only 82 rows out of ~500k).
+The condition on residence has a selectivity of ~4.9%, which is moderately selective.
+The condition on unit_price has a selectivity of ~4.4%, also moderately selective.
+
+Justification:
+Applying the most selective filter first significantly reduces the number of rows early in the execution process
+This minimizes the cost of joins and improves CPU efficiency
+
+Implication for Index Design:
+The column order_datetime should be the leading column in the composite index on the Order table*/
+SELECT COUNT(*) FROM Customer WHERE residence = 'Berlin'; -- 14643 / 300000 = 4.9%
+SELECT COUNT(*) FROM "Order" WHERE order_datetime ='2025-05-01'; --82 / 501414 = 0.00016 = 0.016%
+SELECT COUNT(*) FROM OrderItem WHERE unit_price BETWEEN 100000 AND 200000; --220897 /5000000 = 0.044 ≈ 4.4%
 
 
 /*Fix 1 → Order table = Table Scan (Order)*/
@@ -146,6 +171,43 @@ CREATE INDEX idx_customer_residence
 ON Customer(residence, idc);
 
 /*Iteration 2 — Index on Customer(residence, idc)
+
+Execution Plan Changes
+✔ Before (Iteration 1):
+INDEX SEEK (Customer PK on idc)
+RID LOOKUP (Customer) ❌
+✔ Now:
+INDEX SEEK (idx_customer_residence) ✔
+❌ No more RID Lookup on Customer
+
+CPU Time
+~1 ms → ~5 ms (still very low, acceptable)
+
+👉 Focus is logical reads reduction, which improved significantly ✔
+
+Customer is Fully Optimized 
+Filter (residence = 'Berlin') handled in index
+✔ Join (idc) also supported
+✔ No RID lookup
+
+Order Still Has Problem
+Reason:
+Index has only order_datetime
+Missing:
+idc
+ido
+
+OrderItem Still Has Problem
+Reason:
+Filter column unit_price not in index
+
+Hash Match Appeared
+Why it appeared:
+Optimizer thinks:
+Data volume still large
+Nested Loop not efficient
+
+OrderItem Still Has Problem
 Problem
 The execution plan still performs:
 RID Lookup on Customer
