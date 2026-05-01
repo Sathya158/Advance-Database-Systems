@@ -154,9 +154,14 @@ Comments:
 
 */
 
+CREATE INDEX idx_customer_residence_idc
+ON Customer(residence, idc);
+
 
 drop index idx_producer_idp on Product;
 
 drop index idx_order_date_ids on "Order";
 
 drop index idx_orderItem_up_ido on OrderItem;
+
+drop index idx_customer_residence_idc on Customer;
